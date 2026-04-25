@@ -38,7 +38,9 @@ If you want to use automatic Z calibration:
 **Requirements:**
 
 - Klipper installed and running
-- [Klipper Tool Changer](https://github.com/viesturz/klipper-toolchanger)
+- A supported toolchanger plugin:
+  - [Klipper Tool Changer](https://github.com/viesturz/klipper-toolchanger), **or**
+  - [AFC-Toolchanger](https://github.com/lindnjoe/AFC-Toolchanger)
 - Moonraker configured
 - Camera setup in Crowsnest & Mainsail
 - SSH access to your printer
@@ -79,22 +81,57 @@ zswitch_z_pos: 7.8        # REQUIRED - Z position + some clearance of the endsto
 lift_z: 1                 # OPTIONAL - Amount to lift Z before moving (default: 1)
 move_speed: 60            # OPTIONAL - XY movement speed in mm/s (default: 60)
 z_move_speed: 10          # OPTIONAL - Z movement speed in mm/s (default: 10)
-start_gcode: 
-  {% set tools = printer.toolchanger.tool_numbers %}
-  {% for tool in tools %}
+start_gcode:
+  {% for tool in printer.axiscope.tool_numbers %}
       M104 T{tool} S150
   {% endfor %}
 before_pickup_gcode: M118 pickup_gcode
 after_pickup_gcode: M118 after_pickup_gcode
                     # NOZZLE_SCRUBBER_W
 finish_gcode: M118 Calibration complete
-  {% set tools = printer.toolchanger.tool_numbers %}
-  {% for tool in tools %}
+  {% for tool in printer.axiscope.tool_numbers %}
       M104 T{tool} S0
   {% endfor %}
   T0
 
 ```
+
+> The macros above iterate `printer.axiscope.tool_numbers`, which Axiscope
+> populates from whichever toolchanger plugin is in use (AFC-Toolchanger or
+> klipper-toolchanger). If you prefer to reference the toolchanger directly,
+> use `printer.toolchanger.tool_numbers` (klipper-toolchanger) or
+> `printer["AFC_Toolchanger Tools"].tool_numbers` (AFC-Toolchanger; replace
+> `Tools` with whatever name you used in `[AFC_Toolchanger <name>]`).
+
+### AFC-Toolchanger users
+
+Axiscope auto-detects an `[AFC_Toolchanger <name>]` section at startup and
+uses it the same way it would use the legacy `[toolchanger]` plugin. No
+extra Axiscope configuration is required.
+
+The per-tool offsets Axiscope writes (`gcode_x_offset`, `gcode_y_offset`,
+`gcode_z_offset`) belong on each `[AFC_extruder <name>]` section, e.g.
+
+```ini
+[AFC_extruder extruder]
+toolchanger_unit: Tools
+tool_number: 0
+gcode_x_offset: 0.0
+gcode_y_offset: 0.0
+gcode_z_offset: 0.0
+# ... AFC filament-load fields ...
+
+[AFC_extruder extruder1]
+toolchanger_unit: Tools
+tool_number: 1
+gcode_x_offset: 0.591
+gcode_y_offset: -1.528
+gcode_z_offset: 0.270
+```
+
+When using `AXISCOPE_SAVE_TOOL_OFFSET` from a Klipper console, pass the
+full section header as `TOOL_NAME`, e.g.
+`AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="AFC_extruder extruder1" OFFSETS="[0.591, -1.528, 0.270]"`.
 
 ### Finding the Endstop Position
 

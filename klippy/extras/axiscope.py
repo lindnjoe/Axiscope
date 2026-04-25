@@ -2,7 +2,12 @@
 import os
 import ast
 from . import tools_calibrate
-from . import toolchanger
+
+# Section prefix used by the AFC-Toolchanger plugin
+# (https://github.com/lindnjoe/AFC-Toolchanger). Each tool unit is declared as
+# [AFC_Toolchanger <name>] and exposes the same tool_numbers/tool_names/active_tool
+# surface as the original viesturz klipper-toolchanger plugin.
+AFC_TOOLCHANGER_PREFIX = 'AFC_Toolchanger '
 
 class Axiscope:
     def __init__(self, config):
@@ -54,7 +59,12 @@ class Axiscope:
         else:
             self.probe_multi_axis = None
 
-        self.toolchanger = self.printer.load_object(config, 'toolchanger')
+        # Toolchanger module is resolved after Klipper finishes loading objects.
+        # AFC-Toolchanger registers each unit as [AFC_Toolchanger <name>] so it
+        # cannot be loaded by static name; fall back to the legacy viesturz
+        # `toolchanger` object name for backwards compatibility.
+        self.toolchanger = None
+        self.toolchanger_kind = None
 
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
 
@@ -72,6 +82,26 @@ class Axiscope:
         self.gcode.register_command('AXISCOPE_SET_ENDSTOP_POSITION', self.cmd_AXISCOPE_SET_ENDSTOP_POSITION, desc=self.cmd_AXISCOPE_SET_ENDSTOP_POSITION_help)
 
     def handle_connect(self):
+        # Discover the toolchanger module.
+        for name, obj in self.printer.objects.items():
+            if name.startswith(AFC_TOOLCHANGER_PREFIX):
+                self.toolchanger = obj
+                self.toolchanger_kind = 'afc'
+                self.gcode.respond_info(
+                    "Axiscope: detected AFC-Toolchanger '%s'." % name)
+                break
+
+        if self.toolchanger is None:
+            self.toolchanger = self.printer.lookup_object('toolchanger', None)
+            if self.toolchanger is not None:
+                self.toolchanger_kind = 'viesturz'
+
+        if self.toolchanger is None:
+            self.gcode.respond_info(
+                "Axiscope: no toolchanger module found. Configure either "
+                "[AFC_Toolchanger <name>] (AFC-Toolchanger) or [toolchanger] "
+                "(klipper-toolchanger).")
+
         if self.config_file_path is not None:
             expanded_path = os.path.expanduser(self.config_file_path)
             self.config_file_path = expanded_path
@@ -89,24 +119,119 @@ class Axiscope:
             self.gcode.respond_info("You can set config_file_path: ~/printer_data/config/axiscope.offsets in your [axiscope] section.")
 
 
+    def _tool_section_name(self, tool):
+        # Return the printer.objects key for `tool` (e.g. "AFC_extruder extruder1"
+        # for AFC-Toolchanger or "tool T0" for klipper-toolchanger).
+        for name, obj in self.printer.objects.items():
+            if obj is tool:
+                return name
+        return getattr(tool, 'name', None)
+
+    def _tool_offsets(self, tool):
+        if hasattr(tool, 'get_offset'):
+            try:
+                offsets = tool.get_offset()
+                if offsets and len(offsets) >= 3:
+                    return [offsets[0], offsets[1], offsets[2]]
+            except Exception:
+                pass
+        return [
+            getattr(tool, 'gcode_x_offset', 0.0),
+            getattr(tool, 'gcode_y_offset', 0.0),
+            getattr(tool, 'gcode_z_offset', 0.0),
+        ]
+
+    def _active_tool_status(self, eventtime):
+        tc = self.toolchanger
+        if tc is None:
+            return {}
+        active = getattr(tc, 'active_tool', None)
+        if not active:
+            return {}
+        # AFC-Toolchanger's AFCExtruder exposes get_tool_status for templates
+        # (its get_status is reserved for filament-load state). klipper-toolchanger
+        # uses get_status. Prefer get_tool_status when available.
+        for attr in ('get_tool_status', 'get_status'):
+            fn = getattr(active, attr, None)
+            if callable(fn):
+                try:
+                    return fn(eventtime)
+                except Exception:
+                    continue
+        return {}
+
+    def _collect_tools(self):
+        tc = self.toolchanger
+        if tc is None:
+            return [], {}
+        tool_numbers = list(getattr(tc, 'tool_numbers', []) or [])
+
+        # AFC-Toolchanger stores tools in a dict keyed by number; klipper-toolchanger
+        # stores them keyed by name and parallel to tool_numbers/tool_names.
+        tools_by_number = {}
+        if isinstance(getattr(tc, 'tools', None), dict):
+            tools_by_number = dict(tc.tools)
+        else:
+            tool_names = list(getattr(tc, 'tool_names', []) or [])
+            for n, name in zip(tool_numbers, tool_names):
+                obj = self.printer.lookup_object(name, None)
+                if obj is not None:
+                    tools_by_number[n] = obj
+        return tool_numbers, tools_by_number
+
     def get_status(self, eventtime):
+        tool_numbers, tools_by_number = self._collect_tools()
+        tools = {}
+        section_names = []
+        for n in tool_numbers:
+            tool = tools_by_number.get(n)
+            if tool is None:
+                continue
+            offsets = self._tool_offsets(tool)
+            section = self._tool_section_name(tool)
+            if section is not None:
+                section_names.append(section)
+            tools[str(n)] = {
+                'tool_number':    n,
+                'name':           getattr(tool, 'name', ''),
+                'section_name':   section,
+                'gcode_x_offset': offsets[0],
+                'gcode_y_offset': offsets[1],
+                'gcode_z_offset': offsets[2],
+            }
+
+        active_tool = getattr(self.toolchanger, 'active_tool', None) \
+            if self.toolchanger else None
+        active_number = getattr(active_tool, 'tool_number', -1) \
+            if active_tool else -1
+
         return {
             'probe_results':   self.probe_results,
             'can_save_config': self.has_cfg_data is not False,
             'endstop_x':       self.x_pos,
             'endstop_y':       self.y_pos,
             'endstop_z':       self.z_pos,
+            'tools':           tools,
+            'tool_numbers':    list(tool_numbers),
+            'tool_names':      section_names,
+            'tool_number':     active_number,
+            'toolchanger_kind': self.toolchanger_kind,
         }
-        
+
     def run_gcode(self, name, template, extra_context):
         """Run gcode with template expansion and context"""
         curtime = self.printer.get_reactor().monotonic()
+        toolchanger_status = {}
+        if self.toolchanger is not None and hasattr(self.toolchanger, 'get_status'):
+            try:
+                toolchanger_status = self.toolchanger.get_status(curtime)
+            except Exception:
+                toolchanger_status = {}
         context = {
             **template.create_template_context(),
-            'tool': self.toolchanger.active_tool.get_status(
-                curtime) if self.toolchanger.active_tool else {},
-            'toolchanger': self.toolchanger.get_status(curtime),
-            'axiscope': self.get_status(curtime),
+            'tool':         self._active_tool_status(curtime),
+            'toolchanger':  toolchanger_status,
+            'axiscope':     self.get_status(curtime),
             **extra_context,
         }
         template.run_gcode_from_command(context)
@@ -212,6 +337,10 @@ class Axiscope:
     cmd_PROBE_ZSWITCH_help = "Probe the Z switch to determine offset."
 
     def cmd_PROBE_ZSWITCH(self, gcmd):
+        if self.toolchanger is None or self.toolchanger.active_tool is None:
+            gcmd.respond_error('No active tool reported by toolchanger.')
+            return
+
         toolhead  = self.printer.lookup_object('toolhead')
         tool_no   = str(self.toolchanger.active_tool.tool_number)
         start_pos = toolhead.get_position()
@@ -246,11 +375,15 @@ class Axiscope:
     cmd_CALIBRATE_ALL_Z_OFFSETS_help = "Probe the Z switch for each tool to determine offset."
 
     def cmd_CALIBRATE_ALL_Z_OFFSETS(self, gcmd):
-        
+
         if not self.is_homed():
             gcmd.respond_info('Must home first.')
             return
-            
+
+        if self.toolchanger is None:
+            gcmd.respond_error('No toolchanger module configured.')
+            return
+
         # Run start_gcode at the beginning of calibration
         self.cmd_AXISCOPE_START_GCODE(gcmd)
 
