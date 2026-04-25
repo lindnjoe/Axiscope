@@ -777,7 +777,11 @@ $(document).on("click", "button", function(e) {
         $("#captured-y").find(">:first-child").text(y_pos);
         $("#captured-z").find(">:first-child").text(z_pos);
     } else if ($(this).is("#toolchange")) {
-        const url = toolChangeURL($(this).data("tool"), $(this).data("select-command"));
+        const tool       = $(this).data("tool");
+        const selectCmd  = $(this).data("select-command");
+        const url        = toolChangeURL(tool, selectCmd);
+        console.log('[axiscope] toolchange tool=', tool,
+                    ' select_command=', selectCmd, ' url=', url);
         $.get(url, function(data){});
     }
 });
