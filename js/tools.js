@@ -1,5 +1,5 @@
 
-const zeroListItem = ({tool_number, disabled, tc_disabled, select_command}) => `
+const zeroListItem = ({tool_number, disabled, tc_disabled, select_command, extruder_name}) => `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
     <div class="row">
@@ -11,8 +11,10 @@ const zeroListItem = ({tool_number, disabled, tc_disabled, select_command}) => `
           name="T${tool_number}"
           data-tool="${tool_number}"
           data-select-command="${select_command}"
+          title="Runs: ${select_command}"
         >
           <h1>T${tool_number}</h1>
+          <small class="text-secondary" style="font-size:10px;">${extruder_name || ''}</small>
         </button>
       </div>
 
@@ -69,7 +71,7 @@ const zeroListItem = ({tool_number, disabled, tc_disabled, select_command}) => `
 </li>
 `;
 
-const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabled, select_command}) => `
+const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabled, select_command, extruder_name}) => `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
     <div class="row">
@@ -81,8 +83,10 @@ const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabl
           name="T${tool_number}"
           data-tool="${tool_number}"
           data-select-command="${select_command}"
+          title="Runs: ${select_command}"
         >
           <h1>T${tool_number}</h1>
+          <small class="text-secondary" style="font-size:10px;">${extruder_name || ''}</small>
         </button>
       </div>
 
@@ -367,11 +371,14 @@ function getTools() {
     var hasProbeResults = axiscope.probe_results != null;
 
     $("#tool-list").html('');
+    console.log('[axiscope] toolchanger_kind=', axiscope.toolchanger_kind,
+                ' tool_numbers=', tool_numbers, ' tools=', tools);
     $.each(tool_numbers, function(i, tool_number) {
       var tool        = tools[String(tool_number)] || {};
       var cx_offset   = (tool.gcode_x_offset || 0).toFixed(3);
       var cy_offset   = (tool.gcode_y_offset || 0).toFixed(3);
       var select_command = tool.select_command || ("T" + tool_number);
+      var extruder_name  = tool.name || '';
       var disabled    = "";
       var tc_disabled = "disabled";
 
@@ -381,9 +388,9 @@ function getTools() {
       }
 
       if (tool_number === 0) {
-        $("#tool-list").append(zeroListItem({tool_number: tool_number, disabled: disabled, tc_disabled: tc_disabled, select_command: select_command}));
+        $("#tool-list").append(zeroListItem({tool_number: tool_number, disabled: disabled, tc_disabled: tc_disabled, select_command: select_command, extruder_name: extruder_name}));
       } else {
-        $("#tool-list").append(nonZeroListItem({tool_number: tool_number, cx_offset: cx_offset, cy_offset: cy_offset, disabled: disabled, tc_disabled: tc_disabled, select_command: select_command}));
+        $("#tool-list").append(nonZeroListItem({tool_number: tool_number, cx_offset: cx_offset, cy_offset: cy_offset, disabled: disabled, tc_disabled: tc_disabled, select_command: select_command, extruder_name: extruder_name}));
       }
     });
 
