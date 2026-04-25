@@ -20,22 +20,24 @@ function isValidIP(input) {
 }
 
 function updatePage() {
-  $.get(printerUrl(printerIp,"/printer/objects/query?gcode_move&toolhead&toolchanger&quad_gantry_level&stepper_enable&axiscope"), function(data){
-    // console.log(printerUrl)
+  $.get(printerUrl(printerIp,"/printer/objects/query?gcode_move&toolhead&quad_gantry_level&stepper_enable&axiscope"), function(data){
     if (data['result']) {
+      var status      = data['result']['status'];
+      var positions   = status['gcode_move']['position'];
+      var gcode_pos   = status['gcode_move']['gcode_position'];
+      var homed       = status['toolhead']['homed_axes'] == "xyz";
+      var qgl_done    = status['quad_gantry_level']['applied'];
+      var steppers    = status['stepper_enable']['steppers'];
+      // Tool data is republished by [axiscope] so the UI works with either
+      // the AFC-Toolchanger (printer["AFC_Toolchanger <name>"]) or the legacy
+      // viesturz klipper-toolchanger (printer.toolchanger) plugin.
+      var axiscope    = status['axiscope'] || {};
+      var tool_number = (typeof axiscope.tool_number === 'number')
+                          ? axiscope.tool_number : -1;
+      var tools       = axiscope.tool_numbers || [];
 
-      var positions   = data['result']['status']['gcode_move']['position'];
-      var gcode_pos   = data['result']['status']['gcode_move']['gcode_position'];
-      var homed       = data['result']['status']['toolhead']['homed_axes'] == "xyz";
-      var qgl_done    = data['result']['status']['quad_gantry_level']['applied'];
-      var steppers    = data['result']['status']['stepper_enable']['steppers'];
-      // var initialized = data['result']['status']['toolchanger']['status'] == "ready";
-      var tool_number = data['result']['status']['toolchanger']['tool_number'];
-      var tools       = data['result']['status']['toolchanger']['tool_numbers'];
-
-      var axis_min    = data['result']['status']['toolhead']['axis_minimum'];
-      var axis_max    = data['result']['status']['toolhead']['axis_maximum'];
-      var axiscope    = data['result']['status']['axiscope'];
+      var axis_min    = status['toolhead']['axis_minimum'];
+      var axis_max    = status['toolhead']['axis_maximum'];
 
       updatePositions(positions, gcode_pos);
       updateHoming(homed);

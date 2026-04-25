@@ -339,112 +339,96 @@ function calibrateAllTools() {
 }
 
 function getTools() {
-  var url = printerUrl(printerIp, "/printer/objects/query?toolchanger")
-  var tool_names;
-  var tool_numbers;
-  var active_tool;
+  // Axiscope republishes the active toolchanger's tool list (whether viesturz
+  // klipper-toolchanger or AFC-Toolchanger) so the UI doesn't have to know
+  // which plugin is in use.
+  var url = printerUrl(printerIp, "/printer/objects/query?axiscope");
 
   $.get(url, function(data){
-    tool_names   = data['result']['status']['toolchanger']['tool_names'];
-    tool_numbers = data['result']['status']['toolchanger']['tool_numbers'];
-    active_tool  = data['result']['status']['toolchanger']['tool_number'];
+    var axiscope = data && data.result && data.result.status
+                   ? data.result.status.axiscope : null;
+    if (!axiscope) {
+      console.error('Axiscope object not available from printer.');
+      return;
+    }
 
-    url = printerUrl(printerIp, "/printer/objects/query?")
+    var tools        = axiscope.tools || {};
+    var tool_numbers = axiscope.tool_numbers || [];
+    var active_tool  = (typeof axiscope.tool_number === 'number')
+                         ? axiscope.tool_number : -1;
+    var hasProbeResults = axiscope.probe_results != null;
 
-    $.each(tool_numbers, function(i) {
-      url = url + tool_names[i] + "&";
+    $("#tool-list").html('');
+    $.each(tool_numbers, function(i, tool_number) {
+      var tool        = tools[String(tool_number)] || {};
+      var cx_offset   = (tool.gcode_x_offset || 0).toFixed(3);
+      var cy_offset   = (tool.gcode_y_offset || 0).toFixed(3);
+      var disabled    = "";
+      var tc_disabled = "disabled";
+
+      if (tool_number != active_tool) {
+        disabled    = "disabled";
+        tc_disabled = "";
+      }
+
+      if (tool_number === 0) {
+        $("#tool-list").append(zeroListItem({tool_number: tool_number, disabled: disabled, tc_disabled: tc_disabled}));
+      } else {
+        $("#tool-list").append(nonZeroListItem({tool_number: tool_number, cx_offset: cx_offset, cy_offset: cy_offset, disabled: disabled, tc_disabled: tc_disabled}));
+      }
     });
 
-    url = url.substring(0, url.length-1);
+    // Add calibration button after all tools.
+    var probeResultsCount = hasProbeResults
+      ? Object.keys(axiscope.probe_results).length : 0;
+    $("#tool-list").append(calibrateButton(probeResultsCount > 0));
 
-    $.get(url, function(data){
-      $("#tool-list").html('');
-      $.each(tool_numbers, function(i) {
-        var tool_number = data['result']['status'][tool_names[i]]['tool_number'];
-        var cx_offset   = data['result']['status'][tool_names[i]]['gcode_x_offset'].toFixed(3);
-        var cy_offset   = data['result']['status'][tool_names[i]]['gcode_y_offset'].toFixed(3);
-        var disabled    = "";
-        var tc_disabled = "disabled";
+    if (hasProbeResults) {
+      $('.z-fields').removeClass('d-none');
+    }
 
-        if (tool_number != active_tool) {
-          disabled    = "disabled";
-          tc_disabled = "";
-        }
-        
-        if (tool_number === 0) {
-          $("#tool-list").append(zeroListItem({tool_number: tool_number, disabled: disabled, tc_disabled: tc_disabled}));
-        } else {
-          $("#tool-list").append(nonZeroListItem({tool_number: tool_number, cx_offset: cx_offset, cy_offset: cy_offset, disabled: disabled, tc_disabled: tc_disabled}));
-        }
-      });
+    // Set up copy handlers for all tools
+    tool_numbers.forEach(tool => {
+      $(`#T${tool}-copy-all`).off('click').on('click', function() {
+        const $this = $(this);
 
-      // Add calibration button after all tools
-      getProbeResults().then(results => {
-        const hasProbeResults = Object.keys(results).length > 0;
-        $("#tool-list").append(calibrateButton(hasProbeResults));
-      });
-      
-      // Check if axiscope is available
-      $.get(printerUrl(printerIp, "/printer/objects/query?axiscope")).then(function(data) {
-        const hasProbeResults = data.result?.status?.axiscope?.probe_results != null;
+        // Get X/Y offsets
+        const xOffset = $(`#T${tool}-x-new`).find('>:first-child').text();
+        const yOffset = $(`#T${tool}-y-new`).find('>:first-child').text();
+        let gcodeCommands = [
+          `gcode_x_offset: ${xOffset}`,
+          `gcode_y_offset: ${yOffset}`
+        ];
+
         if (hasProbeResults) {
-          $('.z-fields').removeClass('d-none');
+          const zValue = $(`#T${tool}-z-new`).find('>:first-child').text();
+          gcodeCommands.push(`gcode_z_offset: ${zValue}`);
         }
-      }).catch(function(error) {
-        console.error('Error checking axiscope availability:', error);
-      });
 
-      // Set up copy handlers for all tools
-      tool_numbers.forEach(tool => {
-        $(`#T${tool}-copy-all`).off('click').on('click', function() {
-          const $this = $(this);
-          const originalText = $this.text();
-          
-          // Get X/Y offsets
-          const xOffset = $(`#T${tool}-x-new`).find('>:first-child').text();
-          const yOffset = $(`#T${tool}-y-new`).find('>:first-child').text();
-          let gcodeCommands = [
-            `gcode_x_offset: ${xOffset}`,
-            `gcode_y_offset: ${yOffset}`
-          ];
-          
-          // Check if axiscope is available before including Z offset
-          $.get(printerUrl(printerIp, "/printer/objects/query?axiscope")).then(data => {
-            const hasProbeResults = data.result?.status?.axiscope?.probe_results != null;
-            if (hasProbeResults) {
-              const zValue = $(`#T${tool}-z-new`).find('>:first-child').text();
-              gcodeCommands.push(`gcode_z_offset: ${zValue}`);
-            }
-            
-            // Create temporary textarea
-            const textarea = document.createElement('textarea');
-            textarea.value = gcodeCommands.join('\n');
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            
-            try {
-              textarea.select();
-              document.execCommand('copy');
-              const $icon = $this.find('i');
-              $icon.removeClass('bi-clipboard-data').addClass('bi-clipboard-check-fill text-success');
-              setTimeout(() => {
-                $icon.removeClass('bi-clipboard-check-fill text-success').addClass('bi-clipboard-data');
-              }, 1000);
-            } catch (err) {
-              console.error('Failed to copy:', err);
-            } finally {
-              document.body.removeChild(textarea);
-            }
-          }).catch(error => {
-            console.error('Error checking axiscope availability:', error);
-          });
-        });
+        const textarea = document.createElement('textarea');
+        textarea.value = gcodeCommands.join('\n');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+
+        try {
+          textarea.select();
+          document.execCommand('copy');
+          const $icon = $this.find('i');
+          $icon.removeClass('bi-clipboard-data').addClass('bi-clipboard-check-fill text-success');
+          setTimeout(() => {
+            $icon.removeClass('bi-clipboard-check-fill text-success').addClass('bi-clipboard-data');
+          }, 1000);
+        } catch (err) {
+          console.error('Failed to copy:', err);
+        } finally {
+          document.body.removeChild(textarea);
+        }
       });
     });
 
     updateTools(tool_numbers, active_tool);
-    
+
     // Start periodic updates after initial tool load
     startProbeResultsUpdates();
   });
