@@ -70,6 +70,40 @@ The install script will:
 
 ## Configuration
 
+Axiscope supports two Z calibration backends:
+
+- `z_backend: switch` (default) — physical endstop probed via `tools_calibrate` /
+  `klipper-toolchanger`, the original Axiscope flow.
+- `z_backend: cartographer` — uses Cartographer / scanner touch probing. T0 (or
+  whatever you set as `reference_tool`) runs `CARTOGRAPHER_TOUCH_HOME`, every
+  other tool runs `CARTOGRAPHER_TOUCH_PROBE` and the resulting `last_z_result`
+  becomes the suggested `gcode_z_offset`.
+
+### Cartographer (`z_backend: cartographer`)
+
+```ini
+[axiscope]
+z_backend: cartographer
+probe_x_pos: 175.0          # bed X for the touch probe
+probe_y_pos: 175.0          # bed Y for the touch probe
+reference_tool: 0           # tool number to use as the Z reference
+touch_home_gcode: CARTOGRAPHER_TOUCH_HOME
+touch_probe_gcode: CARTOGRAPHER_TOUCH_PROBE
+use_current_z_offsets: True # add measured delta on top of the running offset
+lift_z: 5
+move_speed: 60
+z_move_speed: 10
+config_file_path: ~/printer_data/config/printer.cfg
+```
+
+When `z_backend: cartographer`, Axiscope reads the saved `touch_model z_offset`
+from your printer's `SAVE_CONFIG` block (under `[cartographer touch_model ...]`
+or `[scanner touch_model ...]`) and applies it to the touch fallback. The web UI
+shows "Contact Z" / "Suggested Z" plus the active source ("Cartographer Touch"
+vs. "Cartographer Ref") and hides the physical-switch bed-map.
+
+### Switch (`z_backend: switch`, default)
+
 If you want to use automatic Z calibration, add the following to your `printer.cfg`:
 
 ```ini
@@ -132,9 +166,26 @@ gcode_y_offset: -1.528
 gcode_z_offset: 0.270
 ```
 
-When using `AXISCOPE_SAVE_TOOL_OFFSET` from a Klipper console, pass the
-full section header as `TOOL_NAME`, e.g.
-`AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="AFC_extruder extruder1" OFFSETS="[0.591, -1.528, 0.270]"`.
+**Saving offsets back to AFC.** When AFC is loaded, Axiscope routes saves
+through `AFC_functions.ConfigRewrite` so they land directly in whichever
+`.cfg` file under your AFC config directory contains the matching
+`[AFC_extruder <name>]` section — `printer.cfg` is left alone, and you
+do **not** need `config_file_path:` set in `[axiscope]` for AFC saves.
+
+The "Save" button on each tool card calls
+`AXISCOPE_SAVE_TOOL_OFFSET TOOL=<n> OFFSETS=[...]`. From the Klipper
+console you can use either form:
+
+```
+AXISCOPE_SAVE_TOOL_OFFSET TOOL=1 OFFSETS="[0.591, -1.528, 0.270]"
+AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="AFC_extruder extruder1" \
+    OFFSETS="[0.591, -1.528, 0.270]"
+```
+
+Restart Klipper afterwards to fully reload the config (Axiscope mirrors
+the new values onto the live `AFCExtruder` so the very next tool pickup
+already uses them, but a restart is what makes them stick across power
+cycles regardless).
 
 ### Finding the Endstop Position
 

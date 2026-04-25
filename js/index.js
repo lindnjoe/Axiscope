@@ -1,5 +1,5 @@
 // Global variables and utility functions
-const AXISCOPE_JS_VERSION = 'afc-select-tool-2';
+const AXISCOPE_JS_VERSION = 'afc-config-writer-1';
 console.log('[axiscope] index.js loaded, version=', AXISCOPE_JS_VERSION);
 let printerIp = '';
 let WebcamPath = '/webcam?action=stream';
@@ -52,7 +52,8 @@ function updatePage() {
 }
 
 function updateBedMap(axiscope, axis_min, axis_max, gcode_pos) {
-    if (!axiscope || !axis_min || !axis_max) {
+    if (!axiscope || !axis_min || !axis_max
+        || axiscope.z_backend === 'cartographer') {
         $('#endstop-section').hide();
         return;
     }
