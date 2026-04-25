@@ -56,7 +56,14 @@ class Axiscope:
         self.start_gcode = self.gcode_macro.load_template(config, 'start_gcode', '')
         self.before_pickup_gcode = self.gcode_macro.load_template(config, 'before_pickup_gcode', '')
         self.after_pickup_gcode = self.gcode_macro.load_template(config, 'after_pickup_gcode', '')
+        self.pre_probe_gcode = self.gcode_macro.load_template(config, 'pre_probe_gcode', '')
         self.finish_gcode = self.gcode_macro.load_template(config, 'finish_gcode', '')
+
+        # Optional probe-prep heat-soak. When > 0, Axiscope issues
+        # `M109 S<probe_temp>` after the tool change and before
+        # pre_probe_gcode runs, so any nozzle-brush macro (e.g. AFC_BRUSH)
+        # in pre_probe_gcode operates on a hot, consistently-tempered tip.
+        self.probe_temp = config.getint('probe_temp', 0)
 
         self.has_cfg_data     = False
         self.probe_results = {}
@@ -113,6 +120,7 @@ class Axiscope:
         self.gcode.register_command('AXISCOPE_START_GCODE', self.cmd_AXISCOPE_START_GCODE, desc="Execute the Axiscope start G-code macro")
         self.gcode.register_command('AXISCOPE_BEFORE_PICKUP_GCODE', self.cmd_AXISCOPE_BEFORE_PICKUP_GCODE, desc="Execute the Axiscope before pickup G-code macro")
         self.gcode.register_command('AXISCOPE_AFTER_PICKUP_GCODE', self.cmd_AXISCOPE_AFTER_PICKUP_GCODE, desc="Execute the Axiscope after pickup G-code macro")
+        self.gcode.register_command('AXISCOPE_PRE_PROBE_GCODE', self.cmd_AXISCOPE_PRE_PROBE_GCODE, desc="Heat-soak to probe_temp and execute the pre_probe_gcode macro")
         self.gcode.register_command('AXISCOPE_FINISH_GCODE', self.cmd_AXISCOPE_FINISH_GCODE, desc="Execute the Axiscope finish G-code macro")
         self.gcode.register_command('AXISCOPE_SAVE_TOOL_OFFSET',          self.cmd_AXISCOPE_SAVE_TOOL_OFFSET,          desc=self.cmd_AXISCOPE_SAVE_TOOL_OFFSET_help)
         self.gcode.register_command('AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS', self.cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS, desc=self.cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS_help)
@@ -536,6 +544,7 @@ class Axiscope:
             'use_current_z_offsets': self.use_current_z_offsets,
             'cartographer_touch_model_z_offset':
                 self.cartographer_touch_model_z_offset,
+            'probe_temp':       self.probe_temp,
         }
 
     def run_gcode(self, name, template, extra_context):
@@ -824,6 +833,9 @@ class Axiscope:
             self.gcode.run_script_from_command(select_cmd)
             self.cmd_AXISCOPE_AFTER_PICKUP_GCODE(gcmd)
 
+            # Heat-soak + nozzle-brush hook before each probe.
+            self.cmd_AXISCOPE_PRE_PROBE_GCODE(gcmd)
+
             self.gcode.run_script_from_command('MOVE_TO_ZSWITCH')
             self.gcode.run_script_from_command(
                 'PROBE_ZSWITCH SAMPLES=%i' % self.samples)
@@ -877,6 +889,22 @@ class Axiscope:
             self.run_gcode('after_pickup_gcode', self.after_pickup_gcode, {})
         else:
             gcmd.respond_info("No after_pickup_gcode configured for Axiscope")
+
+    def cmd_AXISCOPE_PRE_PROBE_GCODE(self, gcmd):
+        """Heat-soak to probe_temp then run pre_probe_gcode.
+
+        Runs after the tool change has completed (so M109 targets the
+        already-active extruder) and before MOVE_TO_ZSWITCH, giving
+        AFC_BRUSH or any other prep macro a chance to clean a hot tip
+        before the cartographer touch."""
+        if self.probe_temp and int(self.probe_temp) > 0:
+            gcmd.respond_info(
+                'Axiscope: heating active tool to %dC for probe.' % self.probe_temp)
+            self.gcode.run_script_from_command('M109 S%d' % int(self.probe_temp))
+        if self.pre_probe_gcode:
+            self.run_gcode('pre_probe_gcode', self.pre_probe_gcode, {})
+        elif not self.probe_temp:
+            gcmd.respond_info("No probe_temp or pre_probe_gcode configured for Axiscope")
 
     def cmd_AXISCOPE_FINISH_GCODE(self, gcmd):
         """Execute the Axiscope finish G-code macro"""
