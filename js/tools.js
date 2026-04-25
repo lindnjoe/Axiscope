@@ -56,12 +56,28 @@ const zeroListItem = ({tool_number, disabled, tc_disabled, select_command, extru
               <span class="fs-5 lh-sm" id="captured-z" data-axis="z"><small></small></span>
             </div>
           </div>
-          <div class="row justify-content-center">
+          <div class="row justify-content-center z-fields d-none">
             <div class="col-4">
-              <span class="fs-6 lh-sm"><small>Z-Trigger:</small></span>
+              <span class="fs-6 lh-sm"><small>Contact Z:</small></span>
             </div>
             <div class="col-6">
               <span class="fs-5 lh-sm" id="T${tool_number}-z-trigger"><small>-</small></span>
+            </div>
+          </div>
+          <div class="row justify-content-center z-fields d-none">
+            <div class="col-4">
+              <span class="fs-6 lh-sm"><small>Source:</small></span>
+            </div>
+            <div class="col-6">
+              <span class="fs-5 lh-sm" id="T${tool_number}-z-source"><small>-</small></span>
+            </div>
+          </div>
+          <div class="row justify-content-center cartographer-fields d-none" id="T${tool_number}-touch-model-row">
+            <div class="col-4">
+              <span class="fs-6 lh-sm"><small>Touch Model:</small></span>
+            </div>
+            <div class="col-6">
+              <span class="fs-5 lh-sm" id="T${tool_number}-touch-model-z-offset"><small>-</small></span>
             </div>
           </div>
         </div>
@@ -151,11 +167,16 @@ const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabl
             </div>
             <div class="z-fields d-none">
               <div class="row">
-                <span class="fs-6 lh-sm text-secondary"><small>Z-Trigger</small></span>
+                <span class="fs-6 lh-sm text-secondary"><small>Contact Z</small></span>
                 <span class="fs-5 lh-sm text-secondary" id="T${tool_number}-z-trigger"><small>-</small></span>
               </div>
               <div class="row">
-                <span class="fs-6 lh-sm text-secondary"><small>Z-Offset</small></span>
+                <span class="fs-6 lh-sm text-secondary"><small>Source</small></span>
+                <span class="fs-5 lh-sm text-secondary" id="T${tool_number}-z-source"><small>-</small></span>
+              </div>
+              <div class="row cartographer-fields d-none" id="T${tool_number}-touch-model-row">
+                <span class="fs-6 lh-sm text-secondary"><small>Touch Model</small></span>
+                <span class="fs-5 lh-sm text-secondary" id="T${tool_number}-touch-model-z-offset"><small>-</small></span>
               </div>
             </div>
           </div>
@@ -170,7 +191,7 @@ const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabl
               <span class="fs-5 lh-sm" id="T${tool_number}-y-new"><small>0.0</small></span>
             </div>
             <div class="row pb-1">
-              <span class="fs-6 lh-sm"><small>New Z</small></span>
+              <span class="fs-6 lh-sm"><small>Suggested Z</small></span>
               <span class="fs-5 lh-sm" id="T${tool_number}-z-new"><small>0.0</small></span>
             </div>
             <div class="row text-end">
@@ -254,6 +275,20 @@ function toolChangeURL(tool, selectCommand) {
 }
 
 
+function formatProbeSource(source) {
+  switch (source) {
+    case 'cartographer_touch':           return 'Cartographer Touch';
+    case 'cartographer_touch_reference': return 'Cartographer Ref';
+    case 'switch_probe':                 return 'Z Switch';
+    case 'switch_probe_reference':       return 'Z Switch Ref';
+    default: return source ? source.replace(/_/g, ' ') : '-';
+  }
+}
+
+function isCartographerSource(source) {
+  return typeof source === 'string' && source.startsWith('cartographer');
+}
+
 function getProbeResults() {
   var url = printerUrl(printerIp, "/printer/objects/query?axiscope");
   return $.get(url).then(function(data) {
@@ -279,15 +314,29 @@ function getProbeResults() {
 }
 
 function updateProbeResults(tool_number, probeResults) {
-  if (probeResults[tool_number]) {
+  if (!probeResults[tool_number]) return;
   const result = probeResults[tool_number];
-    // Update Z-Trigger for all tools
-    $(`#T${tool_number}-z-trigger`).find('>:first-child').text(result.z_trigger.toFixed(3));
-    
-    // Update Z-Offset only for non-zero tools
-    if (tool_number !== '0' && tool_number !== 0) {
-      $(`#T${tool_number}-z-new`).find('>:first-child').text(result.z_offset.toFixed(3));
-    }
+  const measuredZ  = result.measured_contact_z       != null ? result.measured_contact_z       : result.z_trigger;
+  const suggestedZ = result.suggested_gcode_z_offset != null ? result.suggested_gcode_z_offset : result.z_offset;
+  const source     = result.source || '';
+  const touchModelZ = result.touch_model_z_offset;
+
+  if (measuredZ != null && !isNaN(measuredZ)) {
+    $(`#T${tool_number}-z-trigger`).find('>:first-child').text(Number(measuredZ).toFixed(3));
+  }
+
+  $(`#T${tool_number}-z-source`).find('>:first-child').text(formatProbeSource(source));
+
+  if (touchModelZ != null && isCartographerSource(source)) {
+    $(`#T${tool_number}-touch-model-z-offset`).find('>:first-child').text(Number(touchModelZ).toFixed(3));
+    $(`#T${tool_number}-touch-model-row`).removeClass('d-none');
+  } else {
+    $(`#T${tool_number}-touch-model-row`).addClass('d-none');
+  }
+
+  // Update Suggested Z only for non-reference tools (T0 by default).
+  if (tool_number !== '0' && tool_number !== 0 && suggestedZ != null && !isNaN(suggestedZ)) {
+    $(`#T${tool_number}-z-new`).find('>:first-child').text(Number(suggestedZ).toFixed(3));
   }
 }
 
@@ -401,6 +450,13 @@ function getTools() {
 
     if (hasProbeResults) {
       $('.z-fields').removeClass('d-none');
+    }
+
+    // Cartographer-only metadata rows.
+    if (axiscope.z_backend === 'cartographer') {
+      $('.cartographer-fields').removeClass('d-none');
+    } else {
+      $('.cartographer-fields').addClass('d-none');
     }
 
     // Set up copy handlers for all tools
