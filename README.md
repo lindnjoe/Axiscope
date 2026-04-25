@@ -90,10 +90,30 @@ reference_tool: 0           # tool number to use as the Z reference
 touch_home_gcode: CARTOGRAPHER_TOUCH_HOME
 touch_probe_gcode: CARTOGRAPHER_TOUCH_PROBE
 use_current_z_offsets: True # add measured delta on top of the running offset
+probe_temp: 147             # heat the active extruder before each touch
+pre_probe_gcode: AFC_BRUSH  # runs after the heat-soak, before the touch
 lift_z: 5
 move_speed: 60
 z_move_speed: 10
 config_file_path: ~/printer_data/config/printer.cfg
+```
+
+Per-tool prep happens in this order during `CALIBRATE_ALL_Z_OFFSETS`:
+
+1. Tool change (`AFC_SELECT_TOOL TOOL=<extruder>`)
+2. `M109 S<probe_temp>` if `probe_temp > 0` (waits for the new active extruder)
+3. `pre_probe_gcode` template (e.g. `AFC_BRUSH`)
+4. `MOVE_TO_ZSWITCH` → `PROBE_ZSWITCH` (cartographer touch)
+
+`pre_probe_gcode` is a Jinja template, so anything in `printer.axiscope`
+(`probe_temp`, `tools`, `tool_number`, ...) is available if you want a
+more elaborate sequence — e.g.
+
+```ini
+pre_probe_gcode:
+  M109 S{printer.axiscope.probe_temp}
+  AFC_BRUSH
+  G4 P500
 ```
 
 When `z_backend: cartographer`, Axiscope reads the saved `touch_model z_offset`
