@@ -7,7 +7,8 @@ from . import tools_calibrate
 # (https://github.com/lindnjoe/AFC-Toolchanger). Each tool unit is declared as
 # [AFC_Toolchanger <name>] and exposes the same tool_numbers/tool_names/active_tool
 # surface as the original viesturz klipper-toolchanger plugin.
-AFC_TOOLCHANGER_PREFIX = 'AFC_Toolchanger '
+AFC_TOOLCHANGER_PREFIX = 'AFC_Toolchanger'
+AFC_EXTRUDER_PREFIX = 'AFC_extruder '
 
 class Axiscope:
     def __init__(self, config):
@@ -80,23 +81,55 @@ class Axiscope:
         self.gcode.register_command('AXISCOPE_SAVE_TOOL_OFFSET',          self.cmd_AXISCOPE_SAVE_TOOL_OFFSET,          desc=self.cmd_AXISCOPE_SAVE_TOOL_OFFSET_help)
         self.gcode.register_command('AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS', self.cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS, desc=self.cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS_help)
         self.gcode.register_command('AXISCOPE_SET_ENDSTOP_POSITION', self.cmd_AXISCOPE_SET_ENDSTOP_POSITION, desc=self.cmd_AXISCOPE_SET_ENDSTOP_POSITION_help)
+        self.gcode.register_command('AXISCOPE_DEBUG', self.cmd_AXISCOPE_DEBUG, desc="Print discovered toolchanger and tool objects.")
+
+    def _find_afc_toolchanger(self):
+        # AFC-Toolchanger registers as either [AFC_Toolchanger] (no name) or
+        # [AFC_Toolchanger <name>]. Match both.
+        for name, obj in self.printer.objects.items():
+            if name == AFC_TOOLCHANGER_PREFIX or name.startswith(
+                    AFC_TOOLCHANGER_PREFIX + ' '):
+                return name, obj
+        return None, None
+
+    def _afc_extruder_objects(self):
+        # Yield every [AFC_extruder <name>] object so we can fall back to
+        # building a tool list directly from extruders even if no
+        # [AFC_Toolchanger] section is present (or its tools dict is empty).
+        for name, obj in self.printer.objects.items():
+            if name.startswith(AFC_EXTRUDER_PREFIX):
+                yield name, obj
 
     def handle_connect(self):
         # Discover the toolchanger module.
-        for name, obj in self.printer.objects.items():
-            if name.startswith(AFC_TOOLCHANGER_PREFIX):
-                self.toolchanger = obj
-                self.toolchanger_kind = 'afc'
-                self.gcode.respond_info(
-                    "Axiscope: detected AFC-Toolchanger '%s'." % name)
-                break
+        afc_name, afc_obj = self._find_afc_toolchanger()
+        if afc_obj is not None:
+            self.toolchanger = afc_obj
+            self.toolchanger_kind = 'afc'
+            self.gcode.respond_info(
+                "Axiscope: detected AFC-Toolchanger '%s'." % afc_name)
 
         if self.toolchanger is None:
             self.toolchanger = self.printer.lookup_object('toolchanger', None)
             if self.toolchanger is not None:
                 self.toolchanger_kind = 'viesturz'
+                self.gcode.respond_info(
+                    "Axiscope: detected klipper-toolchanger.")
 
+        # If no toolchanger module is registered, fall back to scanning for
+        # AFC_extruder objects directly. Each AFC_extruder carries its own
+        # tool_number and gcode_*_offset values, so the UI still works as
+        # long as the extruders exist.
         if self.toolchanger is None:
+            extruders = [o for _, o in self._afc_extruder_objects()
+                         if getattr(o, 'tool_number', -1) >= 0]
+            if extruders:
+                self.toolchanger_kind = 'afc-extruders-only'
+                self.gcode.respond_info(
+                    "Axiscope: no [AFC_Toolchanger] section found; using %d "
+                    "[AFC_extruder] section(s) directly." % len(extruders))
+
+        if self.toolchanger is None and self.toolchanger_kind is None:
             self.gcode.respond_info(
                 "Axiscope: no toolchanger module found. Configure either "
                 "[AFC_Toolchanger <name>] (AFC-Toolchanger) or [toolchanger] "
@@ -162,21 +195,44 @@ class Axiscope:
 
     def _collect_tools(self):
         tc = self.toolchanger
-        if tc is None:
-            return [], {}
-        tool_numbers = list(getattr(tc, 'tool_numbers', []) or [])
-
-        # AFC-Toolchanger stores tools in a dict keyed by number; klipper-toolchanger
-        # stores them keyed by name and parallel to tool_numbers/tool_names.
+        tool_numbers = []
         tools_by_number = {}
-        if isinstance(getattr(tc, 'tools', None), dict):
-            tools_by_number = dict(tc.tools)
-        else:
-            tool_names = list(getattr(tc, 'tool_names', []) or [])
-            for n, name in zip(tool_numbers, tool_names):
-                obj = self.printer.lookup_object(name, None)
-                if obj is not None:
-                    tools_by_number[n] = obj
+
+        if tc is not None:
+            tool_numbers = list(getattr(tc, 'tool_numbers', []) or [])
+            # AFC-Toolchanger stores tools in a dict keyed by int; klipper-
+            # toolchanger uses name keys parallel to tool_numbers/tool_names.
+            tc_tools = getattr(tc, 'tools', None)
+            if isinstance(tc_tools, dict):
+                # AFC keys by number; klipper-toolchanger keys by name.
+                # Normalize to int keys when possible.
+                for k, v in tc_tools.items():
+                    if isinstance(k, int):
+                        tools_by_number[k] = v
+                    else:
+                        tn = getattr(v, 'tool_number', None)
+                        if isinstance(tn, int) and tn >= 0:
+                            tools_by_number[tn] = v
+            if not tools_by_number:
+                tool_names = list(getattr(tc, 'tool_names', []) or [])
+                for n, name in zip(tool_numbers, tool_names):
+                    obj = self.printer.lookup_object(name, None)
+                    if obj is not None:
+                        tools_by_number[n] = obj
+
+        # Fallback: enumerate AFC_extruder objects directly. Useful when the
+        # toolchanger object hasn't populated its tools dict yet, when no
+        # [AFC_Toolchanger] section exists, or for sanity-checking what
+        # tool_numbers the running config actually exposes.
+        if not tools_by_number:
+            for _, obj in self._afc_extruder_objects():
+                tn = getattr(obj, 'tool_number', -1)
+                if isinstance(tn, int) and tn >= 0:
+                    tools_by_number[tn] = obj
+            tool_numbers = sorted(tools_by_number.keys())
+        elif not tool_numbers:
+            tool_numbers = sorted(tools_by_number.keys())
+
         return tool_numbers, tools_by_number
 
     def get_status(self, eventtime):
@@ -513,6 +569,51 @@ class Axiscope:
 
         else:
             gcmd.respond_info("Axiscope needs a valid config location (config_file_path) to save tool offsets.")
+
+    def cmd_AXISCOPE_DEBUG(self, gcmd):
+        """Print every AFC_Toolchanger / AFC_extruder / toolchanger object
+        Axiscope can see, the active toolchanger, and the resolved tool list.
+        Run from the Klipper console when the UI shows no tools."""
+        lines = []
+        lines.append("toolchanger_kind = %r" % self.toolchanger_kind)
+        lines.append("toolchanger object = %r" % self.toolchanger)
+
+        afc_tcs = []
+        afc_exts = []
+        for name, obj in self.printer.objects.items():
+            if name == AFC_TOOLCHANGER_PREFIX or name.startswith(
+                    AFC_TOOLCHANGER_PREFIX + ' '):
+                afc_tcs.append((name, obj))
+            elif name.startswith(AFC_EXTRUDER_PREFIX):
+                afc_exts.append((name, obj))
+
+        lines.append("AFC_Toolchanger sections: %d" % len(afc_tcs))
+        for name, obj in afc_tcs:
+            tn = list(getattr(obj, 'tool_numbers', []) or [])
+            tools_dict = getattr(obj, 'tools', None)
+            tools_count = len(tools_dict) if isinstance(tools_dict, dict) else 'n/a'
+            lines.append("  - %s  tool_numbers=%s  tools_dict_size=%s"
+                         % (name, tn, tools_count))
+
+        lines.append("AFC_extruder sections: %d" % len(afc_exts))
+        for name, obj in afc_exts:
+            lines.append("  - %s  tool_number=%s  offsets=(%s, %s, %s)" % (
+                name,
+                getattr(obj, 'tool_number', '?'),
+                getattr(obj, 'gcode_x_offset', '?'),
+                getattr(obj, 'gcode_y_offset', '?'),
+                getattr(obj, 'gcode_z_offset', '?'),
+            ))
+
+        tool_numbers, tools_by_number = self._collect_tools()
+        lines.append("Resolved tool_numbers: %s" % list(tool_numbers))
+        for n in tool_numbers:
+            t = tools_by_number.get(n)
+            lines.append("  T%s -> section=%r offsets=%s" % (
+                n, self._tool_section_name(t),
+                self._tool_offsets(t) if t else None))
+
+        gcmd.respond_info("\n".join(lines))
 
     cmd_AXISCOPE_SET_ENDSTOP_POSITION_help = "Set kinematic position for X, Y, and/or Z axes"
     
