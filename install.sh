@@ -3,8 +3,8 @@
 # Default values
 AXISCOPE_ENV="axiscope-env"
 INSTALL_DIR="$HOME/axiscope"
-REPO_URL="https://github.com/nic335/Axiscope.git"
-BRANCH="main"
+REPO_URL="https://github.com/lindnjoe/Axiscope.git"
+BRANCH="claude/integrate-afc-toolchanger-fjzcp"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -193,7 +193,7 @@ sudo systemctl restart moonraker
 
 # Add symlink of axiscope into klipper/klippy/extras and restart klipper
 echo "Adding symlink of axiscope into klipper/klippy/extras... and restarting klipper"
-sudo ln -s ${HOME}/axiscope/klippy/extras/axiscope.py ${HOME}/klipper/klippy/extras/axiscope.py
+sudo ln -sf ${HOME}/axiscope/klippy/extras/axiscope.py ${HOME}/klipper/klippy/extras/axiscope.py
 sudo systemctl restart klipper
 
 echo "Installation complete!"
