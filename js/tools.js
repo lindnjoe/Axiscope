@@ -1,15 +1,16 @@
 
-const zeroListItem = ({tool_number, disabled, tc_disabled}) => `
+const zeroListItem = ({tool_number, disabled, tc_disabled, select_command}) => `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
     <div class="row">
       <div class="col-2">
-        <button 
+        <button
           type="button"
           class="btn btn-secondary btn-sm w-100 h-100 ${tc_disabled}"
           id="toolchange"
           name="T${tool_number}"
           data-tool="${tool_number}"
+          data-select-command="${select_command}"
         >
           <h1>T${tool_number}</h1>
         </button>
@@ -68,17 +69,18 @@ const zeroListItem = ({tool_number, disabled, tc_disabled}) => `
 </li>
 `;
 
-const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabled}) => `
+const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabled, select_command}) => `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
     <div class="row">
       <div class="col-2">
-        <button 
+        <button
           type="button"
           class="btn btn-secondary btn-sm w-100 h-100 ${tc_disabled}"
           id="toolchange"
           name="T${tool_number}"
           data-tool="${tool_number}"
+          data-select-command="${select_command}"
         >
           <h1>T${tool_number}</h1>
         </button>
@@ -186,7 +188,13 @@ const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabl
 `;
 
 
-function toolChangeURL(tool) {
+function toolChangeURL(tool, selectCommand) {
+  // selectCommand is supplied by axiscope's status (e.g.
+  // "AFC_SELECT_TOOL TOOL=extruder1" for AFC-Toolchanger or "T1" for
+  // klipper-toolchanger). Defaulting to "T<n>" only as a last resort.
+  var selectCmd = selectCommand || ("T" + tool);
+  var encodedSelect = encodeURIComponent(selectCmd);
+
   var x_pos = $("#captured-x").find(":first-child").text();
   var y_pos = $("#captured-y").find(":first-child").text();
   var z_pos = $("#captured-z").find(":first-child").text();
@@ -200,13 +208,13 @@ function toolChangeURL(tool) {
   if (isNaN(x_pos) || isNaN(y_pos) || isNaN(z_pos)) {
     // Even without positions, we still need the proper macro sequence
     var url = printerUrl(printerIp, "/printer/gcode/script?script=AXISCOPE_BEFORE_PICKUP_GCODE");
-    url = url + "%0AT" + tool;
+    url = url + "%0A" + encodedSelect;
     url = url + "%0AAXISCOPE_AFTER_PICKUP_GCODE";
     return url;
   }
 
   // For T0, always use captured position without offsets
-  if (tool !== "0") {
+  if (tool !== "0" && tool !== 0) {
     // Get the position values directly from the inputs
     var tool_x = parseFloat($("input[name=T"+tool+"-x-pos]").val()) || 0.0;
     var tool_y = parseFloat($("input[name=T"+tool+"-y-pos]").val()) || 0.0;
@@ -216,7 +224,7 @@ function toolChangeURL(tool) {
       y_pos = tool_y;
     }
   }
-  
+
   // Format positions to 3 decimal places
   x_pos = x_pos.toFixed(3);
   y_pos = y_pos.toFixed(3);
@@ -224,13 +232,13 @@ function toolChangeURL(tool) {
 
   // Start with AXISCOPE_BEFORE_PICKUP_GCODE macro
   var url = printerUrl(printerIp, "/printer/gcode/script?script=AXISCOPE_BEFORE_PICKUP_GCODE");
-  
+
   // Perform the tool change
-  url = url + "%0AT" + tool;
-  
+  url = url + "%0A" + encodedSelect;
+
   // Run AXISCOPE_AFTER_PICKUP_GCODE macro
   url = url + "%0AAXISCOPE_AFTER_PICKUP_GCODE";
-  
+
   // Add the movement commands
   url = url + "%0ASAVE_GCODE_STATE NAME=RESTORE_POS";
   url = url + "%0AG90";
@@ -363,6 +371,7 @@ function getTools() {
       var tool        = tools[String(tool_number)] || {};
       var cx_offset   = (tool.gcode_x_offset || 0).toFixed(3);
       var cy_offset   = (tool.gcode_y_offset || 0).toFixed(3);
+      var select_command = tool.select_command || ("T" + tool_number);
       var disabled    = "";
       var tc_disabled = "disabled";
 
@@ -372,9 +381,9 @@ function getTools() {
       }
 
       if (tool_number === 0) {
-        $("#tool-list").append(zeroListItem({tool_number: tool_number, disabled: disabled, tc_disabled: tc_disabled}));
+        $("#tool-list").append(zeroListItem({tool_number: tool_number, disabled: disabled, tc_disabled: tc_disabled, select_command: select_command}));
       } else {
-        $("#tool-list").append(nonZeroListItem({tool_number: tool_number, cx_offset: cx_offset, cy_offset: cy_offset, disabled: disabled, tc_disabled: tc_disabled}));
+        $("#tool-list").append(nonZeroListItem({tool_number: tool_number, cx_offset: cx_offset, cy_offset: cy_offset, disabled: disabled, tc_disabled: tc_disabled, select_command: select_command}));
       }
     });
 
