@@ -1,7 +1,6 @@
 
 import os
 import ast
-from . import tools_calibrate
 
 # Section prefix used by the AFC-Toolchanger plugin
 # (https://github.com/lindnjoe/AFC-Toolchanger). Each tool unit is declared as
@@ -49,6 +48,19 @@ class Axiscope:
 
         #setup endstop in query_endstops if pin is set
         if self.pin is not None:
+            # tools_calibrate is shipped by the viesturz klipper-toolchanger
+            # plugin and is NOT present in stock Klipper or in AFC-Toolchanger.
+            # Only require it when the user actually configured a Z-probe pin.
+            try:
+                from . import tools_calibrate
+            except ImportError as e:
+                raise config.error(
+                    "Axiscope: 'pin:' is configured for Z probing, but the "
+                    "tools_calibrate Klipper module is missing. It ships with "
+                    "klipper-toolchanger (https://github.com/viesturz/"
+                    "klipper-toolchanger). Install that plugin OR remove the "
+                    "'pin:' line from [axiscope]. (ImportError: %s)" % (e,)
+                )
             self.probe_multi_axis = tools_calibrate.PrinterProbeMultiAxis(
                 config,
                 tools_calibrate.ProbeEndstopWrapper(config, 'x'),
