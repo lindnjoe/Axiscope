@@ -166,9 +166,26 @@ gcode_y_offset: -1.528
 gcode_z_offset: 0.270
 ```
 
-When using `AXISCOPE_SAVE_TOOL_OFFSET` from a Klipper console, pass the
-full section header as `TOOL_NAME`, e.g.
-`AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="AFC_extruder extruder1" OFFSETS="[0.591, -1.528, 0.270]"`.
+**Saving offsets back to AFC.** When AFC is loaded, Axiscope routes saves
+through `AFC_functions.ConfigRewrite` so they land directly in whichever
+`.cfg` file under your AFC config directory contains the matching
+`[AFC_extruder <name>]` section — `printer.cfg` is left alone, and you
+do **not** need `config_file_path:` set in `[axiscope]` for AFC saves.
+
+The "Save" button on each tool card calls
+`AXISCOPE_SAVE_TOOL_OFFSET TOOL=<n> OFFSETS=[...]`. From the Klipper
+console you can use either form:
+
+```
+AXISCOPE_SAVE_TOOL_OFFSET TOOL=1 OFFSETS="[0.591, -1.528, 0.270]"
+AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="AFC_extruder extruder1" \
+    OFFSETS="[0.591, -1.528, 0.270]"
+```
+
+Restart Klipper afterwards to fully reload the config (Axiscope mirrors
+the new values onto the live `AFCExtruder` so the very next tool pickup
+already uses them, but a restart is what makes them stick across power
+cycles regardless).
 
 ### Finding the Endstop Position
 

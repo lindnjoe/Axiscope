@@ -195,14 +195,19 @@ const nonZeroListItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabl
               <span class="fs-5 lh-sm" id="T${tool_number}-z-new"><small>0.0</small></span>
             </div>
             <div class="row text-end">
-              <button 
-                class="btn btn-link btn-sm p-0" 
-                id="T${tool_number}-copy-all" 
-                title="Copy all offsets"
-              >
-              Copy
-                <i class="bi bi-clipboard-data fs-5"></i>
-              </button>
+              <div class="btn-group btn-group-sm" role="group" aria-label="Offset actions">
+                <button
+                  class="btn btn-link btn-sm p-0 me-2"
+                  id="T${tool_number}-copy-all"
+                  title="Copy all offsets to clipboard"
+                >Copy <i class="bi bi-clipboard-data fs-5"></i></button>
+                <button
+                  class="btn btn-link btn-sm p-0"
+                  id="T${tool_number}-save-all"
+                  data-tool="${tool_number}"
+                  title="Write offsets to the tool's config section (uses AFC ConfigRewrite when available)"
+                >Save <i class="bi bi-floppy fs-5"></i></button>
+              </div>
             </div>
           </div>
         </div>
@@ -458,6 +463,35 @@ function getTools() {
     } else {
       $('.cartographer-fields').addClass('d-none');
     }
+
+    // Set up save handlers for all tools
+    tool_numbers.forEach(tool => {
+      $(`#T${tool}-save-all`).off('click').on('click', function() {
+        const $this = $(this);
+        const xOffset = parseFloat($(`#T${tool}-x-new`).find('>:first-child').text()) || 0.0;
+        const yOffset = parseFloat($(`#T${tool}-y-new`).find('>:first-child').text()) || 0.0;
+        const offsets = [xOffset, yOffset];
+        if (hasProbeResults) {
+          const zValue = parseFloat($(`#T${tool}-z-new`).find('>:first-child').text());
+          if (!isNaN(zValue)) offsets.push(zValue);
+        }
+        const offsetsLiteral = '[' + offsets.map(v => v.toFixed(3)).join(',') + ']';
+        const script = `AXISCOPE_SAVE_TOOL_OFFSET TOOL=${tool} OFFSETS=${offsetsLiteral}`;
+        const url = printerUrl(printerIp, '/printer/gcode/script?script=' + encodeURIComponent(script));
+        console.log('[axiscope] save tool=', tool, ' offsets=', offsetsLiteral);
+        const $icon = $this.find('i');
+        $.get(url)
+          .done(() => {
+            $icon.removeClass('bi-floppy').addClass('bi-check-circle-fill text-success');
+            setTimeout(() => $icon.removeClass('bi-check-circle-fill text-success').addClass('bi-floppy'), 1500);
+          })
+          .fail(err => {
+            console.error('[axiscope] save failed:', err);
+            $icon.removeClass('bi-floppy').addClass('bi-x-circle-fill text-danger');
+            setTimeout(() => $icon.removeClass('bi-x-circle-fill text-danger').addClass('bi-floppy'), 1500);
+          });
+      });
+    });
 
     // Set up copy handlers for all tools
     tool_numbers.forEach(tool => {

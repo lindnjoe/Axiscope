@@ -1,5 +1,5 @@
 // Global variables and utility functions
-const AXISCOPE_JS_VERSION = 'cartographer-1';
+const AXISCOPE_JS_VERSION = 'afc-config-writer-1';
 console.log('[axiscope] index.js loaded, version=', AXISCOPE_JS_VERSION);
 let printerIp = '';
 let WebcamPath = '/webcam?action=stream';

@@ -233,6 +233,110 @@ class Axiscope:
     def has_probe_point(self):
         return all(p is not None for p in [self.probe_x, self.probe_y])
 
+    def _resolve_tool_section_name(self, gcmd):
+        """Resolve a tool to its config section name. Accepts TOOL_NAME=...
+        (full section header like 'AFC_extruder extruder1') or TOOL=<n>
+        (looked up against the discovered toolchanger). Returns the section
+        name string or None on failure (after responding to gcmd)."""
+        explicit = gcmd.get('TOOL_NAME', None)
+        if explicit:
+            return explicit
+
+        tool_no = gcmd.get_int('TOOL', None)
+        if tool_no is None:
+            gcmd.respond_error(
+                'Axiscope: provide TOOL=<n> or TOOL_NAME="<section>".')
+            return None
+
+        _, tools_by_number = self._collect_tools()
+        tool = tools_by_number.get(tool_no)
+        if tool is None:
+            gcmd.respond_error(
+                'Axiscope: tool number %d is not registered.' % tool_no)
+            return None
+
+        section = self._tool_section_name(tool)
+        if not section:
+            gcmd.respond_error(
+                'Axiscope: could not resolve a config section for T%d. '
+                'Pass TOOL_NAME="<section>" instead.' % tool_no)
+            return None
+        return section
+
+    def _afc_config_rewriter(self):
+        """Return AFC's ConfigRewrite callable if AFC is loaded and ready."""
+        afc_fn = self.printer.lookup_object('AFC_functions', None)
+        if afc_fn is None:
+            return None
+        # AFC.afcFunction needs `.afc` (back-pointer to the controller) before
+        # ConfigRewrite can find cfgloc. AFC sets this during its own connect.
+        if getattr(afc_fn, 'afc', None) is None:
+            return None
+        return getattr(afc_fn, 'ConfigRewrite', None)
+
+    def _live_apply_offsets(self, section_name, offsets):
+        """Mirror new offsets onto the live AFCExtruder object so the next
+        tool pickup uses them without waiting for a Klipper restart."""
+        if not section_name.startswith('AFC_extruder '):
+            return
+        tool_obj = self.printer.lookup_object(section_name, None)
+        if tool_obj is None:
+            return
+        axes = "xyz" if len(offsets) == 3 else "xy"
+        for i, a in enumerate(axes):
+            try:
+                setattr(tool_obj, 'gcode_%s_offset' % a, float(offsets[i]))
+            except Exception:
+                pass
+
+    def _write_tool_offsets(self, gcmd, section_name, offsets):
+        """Persist offsets for `section_name`. Prefers AFC's ConfigRewrite
+        when the section is an AFC_extruder; falls back to rewriting
+        config_file_path. Returns True iff a write happened."""
+        axes = "xyz" if len(offsets) == 3 else "xy"
+
+        if section_name.startswith('AFC_extruder '):
+            rewrite = self._afc_config_rewriter()
+            if rewrite is not None:
+                try:
+                    for i, a in enumerate(axes):
+                        rewrite(section_name,
+                                'gcode_%s_offset' % a,
+                                '%.3f' % float(offsets[i]),
+                                'Axiscope offsets')
+                except Exception as e:
+                    gcmd.respond_error(
+                        'Axiscope: AFC ConfigRewrite failed for %s: %s'
+                        % (section_name, e))
+                    return False
+
+                self._live_apply_offsets(section_name, offsets)
+                gcmd.respond_info(
+                    'Axiscope: wrote %s offsets to AFC config '
+                    '(restart Klipper to fully reload).' % section_name)
+                return True
+
+        # Fallback: rewrite config_file_path the old way.
+        if not self.has_cfg_data:
+            gcmd.respond_error(
+                'Axiscope: %s is not an AFC_extruder section and '
+                'config_file_path is not set, so the offsets have nowhere '
+                'to be written. Either set config_file_path in [axiscope] '
+                'or load AFC-Toolchanger so AFC_functions is available.'
+                % section_name)
+            return False
+
+        with open(self.config_file_path, 'r') as f:
+            cfg_data = f.readlines()
+        cfg_data = self.update_tool_offsets(cfg_data, section_name, offsets)
+        with open(self.config_file_path, 'w') as f:
+            for line in cfg_data:
+                f.write(line)
+        gcmd.respond_info(
+            'Axiscope: wrote %s offsets to %s.'
+            % (section_name, self.config_file_path))
+        return True
+
     def handle_connect(self):
         # Discover the toolchanger module.
         afc_name, afc_obj = self._find_afc_toolchanger()
@@ -781,81 +885,109 @@ class Axiscope:
         else:
             gcmd.respond_info("No finish_gcode configured for Axiscope")
 
-    cmd_AXISCOPE_SAVE_TOOL_OFFSET_help = "Save a tool offset to your axiscope config file."
-    
+    cmd_AXISCOPE_SAVE_TOOL_OFFSET_help = "Save a tool offset to its config section."
+
     def cmd_AXISCOPE_SAVE_TOOL_OFFSET(self, gcmd):
         """
-        This function saves the tool offsets for the specified tool.
+        Save offsets for a single tool. AFC users get the values written
+        directly into the matching [AFC_extruder <name>] section via AFC's
+        ConfigRewrite (which scans every .cfg in the AFC config dir).
+        Non-AFC setups continue to write into config_file_path.
 
         Usage
         -----
-        `AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME=<tool_name> OFFSETS=<offsets>`
+        AXISCOPE_SAVE_TOOL_OFFSET (TOOL=<n> | TOOL_NAME="<section>") OFFSETS=<offsets>
 
-        Example
-        -----
-        ```
-        AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="tool T0" OFFSETS="[-0.01, 0.03, 0.01]"
-        ```
+        Examples
+        --------
+        AXISCOPE_SAVE_TOOL_OFFSET TOOL=1 OFFSETS="[1.091, -0.928, -0.080]"
+        AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="AFC_extruder extruder1" \
+            OFFSETS="[1.091, -0.928, -0.080]"
+        AXISCOPE_SAVE_TOOL_OFFSET TOOL_NAME="tool T0" \
+            OFFSETS="[-0.01, 0.03, 0.01]"
         """
-        if self.has_cfg_data is not False:
-            with open(self.config_file_path, 'r') as f:
-                cfg_data = f.readlines()
+        section_name = self._resolve_tool_section_name(gcmd)
+        if section_name is None:
+            return
 
-            tool_name = gcmd.get('TOOL_NAME')
-            offsets   = ast.literal_eval(gcmd.get('OFFSETS'))
+        try:
+            offsets = ast.literal_eval(gcmd.get('OFFSETS'))
+        except Exception as e:
+            gcmd.respond_error('Axiscope: bad OFFSETS literal: %s' % e)
+            return
 
-            out_data = self.update_tool_offsets(cfg_data, tool_name, offsets)
-            gcmd.respond_info("Writing %s offsets." % tool_name)
-
-            with open(self.config_file_path, 'w') as f:
-                for line in out_data:
-                    f.write(line)
-
-                f.close()
-                gcmd.respond_info("Offsets written successfully.")
-
-        else:
-            gcmd.respond_info("Axiscope needs a valid config location (config_file_path) to save tool offsets.")
+        self._write_tool_offsets(gcmd, section_name, offsets)
 
 
-    cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS_help = "Save multiple tool offsets to your axiscope config file."
+    cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS_help = "Save multiple tool offsets to their config sections."
 
     def cmd_AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS(self, gcmd):
         """
-        This function saves the offsets for multiple tools'.
+        Save offsets for several tools at once. AFC users get each value
+        written directly to the corresponding [AFC_extruder <name>] section.
 
         Usage
         -----
-        `AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS TOOLS=<tools> OFFSETS=<offsets>`
+        AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS (TOOLS=<tool_numbers>|TOOL_NAMES=<sections>)
+                                            OFFSETS=<list-of-lists>
 
-        Example
-        -----
-        ```
-        AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS TOOLS="['tool T0', 'tool T1']" OFFSETS="[[-0.01, 0.03, 0.01], [0.02, 0.02, -0.06]]"
-        ```
+        Examples
+        --------
+        AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS TOOLS="[1, 2]" \
+            OFFSETS="[[1.09,-0.92,-0.08], [1.58,0.15,-0.07]]"
+        AXISCOPE_SAVE_MULTIPLE_TOOL_OFFSETS \
+            TOOL_NAMES="['tool T0','tool T1']" \
+            OFFSETS="[[-0.01,0.03,0.01],[0.02,0.02,-0.06]]"
         """
-        if self.has_cfg_data is not False:
-            with open(self.config_file_path, 'r') as f:
-                cfg_data = f.readlines()
+        try:
+            offsets = ast.literal_eval(gcmd.get('OFFSETS'))
+        except Exception as e:
+            gcmd.respond_error('Axiscope: bad OFFSETS literal: %s' % e)
+            return
 
-            tool_names = gcmd.get('TOOLS')
-            offsets    = ast.literal_eval(gcmd.get('OFFSETS'))
-            out_data   = cfg_data
-
-            for i, tool_name in enumerate(tool_names):
-                out_data = self.update_tool_offsets(cfg_data, tool_name, offsets[i])
-
-            gcmd.respond_info("Writing %s offsets." % tool_name)
-
-            with open(self.config_file_path, 'w') as f:
-                for line in out_data:
-                    f.write(line)
-
-                f.close()
-                gcmd.respond_info("Offsets written successfully.")
-
+        section_names = []
+        names_arg = gcmd.get('TOOL_NAMES', None)
+        if names_arg:
+            try:
+                section_names = list(ast.literal_eval(names_arg))
+            except Exception as e:
+                gcmd.respond_error('Axiscope: bad TOOL_NAMES literal: %s' % e)
+                return
         else:
-            gcmd.respond_info("Axiscope needs a valid config location (config_file_path) to save tool offsets.")
+            tools_arg = gcmd.get('TOOLS', None)
+            if not tools_arg:
+                gcmd.respond_error(
+                    'Axiscope: provide TOOLS=[...] or TOOL_NAMES=[...].')
+                return
+            try:
+                tool_numbers = list(ast.literal_eval(tools_arg))
+            except Exception as e:
+                gcmd.respond_error('Axiscope: bad TOOLS literal: %s' % e)
+                return
+            _, tools_by_number = self._collect_tools()
+            for n in tool_numbers:
+                tool = tools_by_number.get(int(n))
+                if tool is None:
+                    gcmd.respond_error(
+                        'Axiscope: tool number %s is not registered.' % n)
+                    return
+                section = self._tool_section_name(tool)
+                if not section:
+                    gcmd.respond_error(
+                        'Axiscope: could not resolve a config section for '
+                        'T%s.' % n)
+                    return
+                section_names.append(section)
+
+        if len(section_names) != len(offsets):
+            gcmd.respond_error(
+                'Axiscope: TOOLS/TOOL_NAMES and OFFSETS length mismatch (%d vs %d).'
+                % (len(section_names), len(offsets)))
+            return
+
+        for section, off in zip(section_names, offsets):
+            if not self._write_tool_offsets(gcmd, section, off):
+                return
 
     def cmd_AXISCOPE_DEBUG(self, gcmd):
         """Print every AFC_Toolchanger / AFC_extruder / toolchanger object
