@@ -1,4 +1,6 @@
 // Global variables and utility functions
+const AXISCOPE_JS_VERSION = 'afc-select-tool-2';
+console.log('[axiscope] index.js loaded, version=', AXISCOPE_JS_VERSION);
 let printerIp = '';
 let WebcamPath = '/webcam?action=stream';
 let path = '/webcam?action=stream';

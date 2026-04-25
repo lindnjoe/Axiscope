@@ -641,9 +641,10 @@ class Axiscope:
         lines.append("Resolved tool_numbers: %s" % list(tool_numbers))
         for n in tool_numbers:
             t = tools_by_number.get(n)
-            lines.append("  T%s -> section=%r offsets=%s" % (
+            lines.append("  T%s -> section=%r offsets=%s select_command=%r" % (
                 n, self._tool_section_name(t),
-                self._tool_offsets(t) if t else None))
+                self._tool_offsets(t) if t else None,
+                self._select_tool_command(t, n) if t else None))
 
         gcmd.respond_info("\n".join(lines))
 
