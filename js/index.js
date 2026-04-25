@@ -777,7 +777,7 @@ $(document).on("click", "button", function(e) {
         $("#captured-y").find(">:first-child").text(y_pos);
         $("#captured-z").find(">:first-child").text(z_pos);
     } else if ($(this).is("#toolchange")) {
-        const url = toolChangeURL($(this).data("tool"));
+        const url = toolChangeURL($(this).data("tool"), $(this).data("select-command"));
         $.get(url, function(data){});
     }
 });

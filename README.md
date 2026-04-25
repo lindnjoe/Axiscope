@@ -92,6 +92,9 @@ finish_gcode: M118 Calibration complete
   {% for tool in printer.axiscope.tool_numbers %}
       M104 T{tool} S0
   {% endfor %}
+  # On AFC-Toolchanger T<n> means "lane swap" (filament change), not a
+  # toolhead switch -- use AFC_SELECT_TOOL with the extruder name instead.
+  # On klipper-toolchanger T0 is the right command. Switch as appropriate.
   T0
 
 ```

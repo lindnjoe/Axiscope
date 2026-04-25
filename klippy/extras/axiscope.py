@@ -205,6 +205,17 @@ class Axiscope:
                     continue
         return {}
 
+    def _select_tool_command(self, tool, tool_number):
+        """Return the gcode command string Axiscope should run to make `tool`
+        the active toolhead. AFC-Toolchanger users want AFC_SELECT_TOOL because
+        T<n> in AFC means "lane swap" (filament change on the current
+        extruder), not a physical toolhead switch."""
+        if self.toolchanger_kind in ('afc', 'afc-extruders-only'):
+            name = getattr(tool, 'name', None) if tool is not None else None
+            if name:
+                return 'AFC_SELECT_TOOL TOOL=%s' % name
+        return 'T%d' % tool_number
+
     def _collect_tools(self):
         tc = self.toolchanger
         tool_numbers = []
@@ -266,6 +277,7 @@ class Axiscope:
                 'gcode_x_offset': offsets[0],
                 'gcode_y_offset': offsets[1],
                 'gcode_z_offset': offsets[2],
+                'select_command': self._select_tool_command(tool, n),
             }
 
         active_tool = getattr(self.toolchanger, 'active_tool', None) \
@@ -448,24 +460,32 @@ class Axiscope:
             gcmd.respond_info('Must home first.')
             return
 
-        if self.toolchanger is None:
-            gcmd.respond_error('No toolchanger module configured.')
+        tool_numbers, tools_by_number = self._collect_tools()
+        if not tool_numbers:
+            gcmd.respond_error(
+                'Axiscope: no tools detected. Run AXISCOPE_DEBUG to inspect '
+                'the discovered toolchanger and extruder objects.')
             return
 
         # Run start_gcode at the beginning of calibration
         self.cmd_AXISCOPE_START_GCODE(gcmd)
 
-        for tool_no in self.toolchanger.tool_numbers:
+        for tool_no in tool_numbers:
+            tool = tools_by_number.get(tool_no)
+            select_cmd = self._select_tool_command(tool, tool_no)
             # Run before_pickup_gcode before tool change
             self.cmd_AXISCOPE_BEFORE_PICKUP_GCODE(gcmd)
-            self.gcode.run_script_from_command('T%i' % tool_no)
+            self.gcode.run_script_from_command(select_cmd)
             # Run after_pickup_gcode after tool change
             self.cmd_AXISCOPE_AFTER_PICKUP_GCODE(gcmd)
-            
+
             self.gcode.run_script_from_command('MOVE_TO_ZSWITCH')
             self.gcode.run_script_from_command('PROBE_ZSWITCH SAMPLES=%i' % self.samples)
 
-        self.gcode.run_script_from_command('T0')
+        # Return to tool 0 using the same select command flavor.
+        if 0 in tools_by_number:
+            self.gcode.run_script_from_command(
+                self._select_tool_command(tools_by_number[0], 0))
 
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.wait_moves()
